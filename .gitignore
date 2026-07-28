@@ -1,0 +1,10 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+
+# Default download destination -- cloned/downloaded PoC repos and exploit
+# code should never end up in a commit.
+bangbang-downloads/
+
+# OS cruft
+.DS_Store
