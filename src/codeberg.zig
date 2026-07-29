@@ -202,27 +202,37 @@ fn fetchReadmeRaw(allocator: std.mem.Allocator, io: std.Io, mode: auth.AuthMode,
     return try al.toOwnedSlice(allocator);
 }
 
-/// Clones `hit` via plain `git clone` (no CLI tool to shell out to). With a
-/// token, embeds it Gitea/Forgejo-style (`token:<PAT>@host`); anonymous
-/// otherwise -- fine, since PoC repos are almost always public.
-pub fn clone(allocator: std.mem.Allocator, io: std.Io, mode: auth.AuthMode, hit: forge.RepoHit, dest_dir: []const u8) !void {
+/// Clones `hit` via plain `git clone` (no CLI tool to shell out to). Any
+/// token travels in the child environment as a scoped Authorization header
+/// (see `auth.gitCloneEnv`) rather than in the URL, so it never lands in the
+/// cloned repo's `.git/config`, git's error output, or a world-readable
+/// argv. Anonymous otherwise -- fine, since PoC repos are almost always
+/// public.
+pub fn clone(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    mode: auth.AuthMode,
+    hit: forge.RepoHit,
+    dest_dir: []const u8,
+    environ: *const std.process.Environ.Map,
+) !void {
     const token: ?[]const u8 = switch (mode) {
         .token => |t| t,
         .cli, .none => null,
     };
 
-    const url = if (token) |t|
-        try std.fmt.allocPrint(allocator, "https://token:{s}@codeberg.org/{s}.git", .{ t, hit.full_name })
-    else
-        try std.fmt.allocPrint(allocator, "https://codeberg.org/{s}.git", .{hit.full_name});
+    const url = try std.fmt.allocPrint(allocator, "https://codeberg.org/{s}.git", .{hit.full_name});
+    var env = try auth.gitCloneEnv(allocator, environ, .codeberg, token);
+    defer env.deinit();
 
     const result = try std.process.run(allocator, io, .{
         .argv = &.{ "git", "clone", "--depth", "1", url, dest_dir },
+        .environ_map = &env,
         .stdout_limit = .limited(64 * 1024),
         .stderr_limit = .limited(64 * 1024),
     });
     if (!forge.termOk(result.term)) {
-        std.debug.print("{s}\n", .{result.stderr});
+        auth.printRedactedStderr(result.stderr, token);
         return error.CloneFailed;
     }
 }

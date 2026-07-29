@@ -42,6 +42,10 @@ pub const Options = struct {
     fallback_query: ?[]const u8 = null,
     fallback_per_page: usize = 15,
     sources: std.EnumSet(forge.Host) = .initFull(),
+    /// Passed through to `git clone`'s child environment so a token can be
+    /// handed over as a scoped Authorization header instead of being baked
+    /// into the clone URL -- see `auth.gitCloneEnv`.
+    environ: *const std.process.Environ.Map,
 };
 
 fn starsDesc(_: void, a: forge.RepoHit, b: forge.RepoHit) bool {
@@ -101,7 +105,9 @@ fn buildVisible(allocator: std.mem.Allocator, groups: []const Group, show_all: b
                 continue;
             }
             const host_idx = @intFromEnum(entry.hit.host);
-            if (!show_all and per_host_shown[host_idx] >= max_hits) continue;
+            // max_hits 0 means "no cap", same convention as --max-cves.
+            // Compared literally, `>= 0` would hide every hit instead.
+            if (!show_all and max_hits != 0 and per_host_shown[host_idx] >= max_hits) continue;
             per_host_shown[host_idx] += 1;
             try idxs.append(allocator, i);
         }
@@ -121,14 +127,16 @@ fn countDumps(all: []const HitEntry) usize {
 fn renderHit(out: *std.Io.Writer, c: color.Colors, e: HitEntry, gi: usize, hi: usize) !void {
     const mark_color = if (e.selected) c.green else "";
     const mark: u8 = if (e.selected) 'x' else ' ';
-    try out.print("  [{s}{c}{s}] {d}.{d}  {s}{s}{s}  {s}{s}{s}  {s}\xe2\x98\x85{d}{s}  {s}", .{
+    try out.print("  [{s}{c}{s}] {d}.{d}  {s}{s}{s}  {s}{s}{s}  {s}\xe2\x98\x85{d}{s}  ", .{
         mark_color, mark, c.reset,
         gi,          hi,
         c.dim,       e.hit.host.label(), c.reset,
         c.bold,      e.hit.full_name,    c.reset,
         c.yellow,    e.hit.stars,        c.reset,
-        e.hit.description,
     });
+    // Remote-authored text: strip control bytes so it can't rewrite the
+    // listing around it (newlines collapse to spaces to keep this one line).
+    try forge.writeSanitized(out, e.hit.description, false);
     if (e.hit.is_dump) try out.print("  {s}[dump-flagged]{s}", .{ c.red, c.reset });
     try out.writeAll("\n");
 
@@ -226,14 +234,22 @@ fn applyToTargets(out: *std.Io.Writer, groups: []Group, visible: []const []usize
 }
 
 fn printExpanded(out: *std.Io.Writer, c: color.Colors, e: HitEntry, group_num: usize, hit_num: usize) !void {
-    try out.print("\n{s}--- {d}.{d}  {s} ---{s}\n{s}\n", .{
+    try out.print("\n{s}--- {d}.{d}  {s} ---{s}\n", .{
         c.dim,
         group_num,
         hit_num,
         e.hit.full_name,
         c.reset,
-        if (e.hit.readme_full.len > 0) e.hit.readme_full else "(no readme found)",
     });
+    // The README is whatever bytes the repo author committed -- the single
+    // largest piece of untrusted content bangbang displays. Control bytes
+    // come out; newlines stay, since this is deliberately multi-line.
+    if (e.hit.readme_full.len > 0) {
+        try forge.writeSanitized(out, e.hit.readme_full, true);
+    } else {
+        try out.writeAll("(no readme found)");
+    }
+    try out.writeAll("\n");
 }
 
 fn expandTargets(out: *std.Io.Writer, c: color.Colors, groups: []const Group, visible: []const []usize, it: anytype) !void {
@@ -279,7 +295,7 @@ fn doDownload(allocator: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, gro
                 .codeberg => opts.cb_mode,
                 .exploitdb => .none, // unused: exploitdb.download needs no auth
             };
-            const result = try download.downloadOne(allocator, io, dir, g.dir_name, e.hit, mode);
+            const result = try download.downloadOne(allocator, io, dir, g.dir_name, e.hit, mode, opts.environ);
             if (result.ok) {
                 try out.print("  ok    {s} -> {s}\n", .{ e.hit.full_name, result.dest });
             } else {

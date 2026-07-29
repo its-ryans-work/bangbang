@@ -30,20 +30,27 @@ pub fn downloadOne(
     dir_name: []const u8,
     hit: forge.RepoHit,
     mode: auth.AuthMode,
+    environ: *const std.process.Environ.Map,
 ) !Result {
     const parent_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ base_dir, dir_name });
     std.Io.Dir.cwd().createDirPath(io, parent_dir) catch |err| {
         return .{ .hit = hit, .dest = parent_dir, .ok = false, .err_name = @errorName(err) };
     };
 
+    // owner/name are remote-controlled (a forge API's response, or exploit-db's
+    // CSV). Sanitizing here rather than at each source means a new host can't
+    // reintroduce a traversal by forgetting to do it: whatever they contain,
+    // each can only ever contribute one harmless path component.
+    const safe_owner = try forge.sanitizePathComponent(allocator, hit.owner);
+    const safe_name = try forge.sanitizePathComponent(allocator, hit.name);
     const dest = try std.fmt.allocPrint(allocator, "{s}/{s}-{s}__{s}", .{
-        parent_dir, hit.host.label(), hit.owner, hit.name,
+        parent_dir, hit.host.label(), safe_owner, safe_name,
     });
 
     const clone_err: ?anyerror = switch (hit.host) {
-        .github => if (github.clone(allocator, io, mode, hit, dest)) |_| null else |err| err,
-        .gitlab => if (gitlab.clone(allocator, io, mode, hit, dest)) |_| null else |err| err,
-        .codeberg => if (codeberg.clone(allocator, io, mode, hit, dest)) |_| null else |err| err,
+        .github => if (github.clone(allocator, io, mode, hit, dest, environ)) |_| null else |err| err,
+        .gitlab => if (gitlab.clone(allocator, io, mode, hit, dest, environ)) |_| null else |err| err,
+        .codeberg => if (codeberg.clone(allocator, io, mode, hit, dest, environ)) |_| null else |err| err,
         // No repo to clone -- writes the single exploit file into `dest`
         // instead. No auth involved, so `mode` is unused here.
         .exploitdb => if (exploitdb.download(allocator, io, hit, dest)) |_| null else |err| err,

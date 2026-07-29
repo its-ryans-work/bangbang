@@ -127,6 +127,69 @@ pub fn sanitizeDirName(allocator: std.mem.Allocator, s: []const u8) ![]const u8 
     return out;
 }
 
+/// Like `sanitizeDirName` but keeps '.' so ordinary repo names (`foo.js`,
+/// `poc.py`) survive intact, while still guaranteeing the result is a single
+/// harmless path component.
+///
+/// Everything reaching here is remote-controlled: a repo owner/name from a
+/// forge API, or an id straight out of exploit-db's CSV. A component
+/// containing a separator or a `..` would let a download escape its
+/// destination directory once joined into a path, so separators become '-'
+/// and any dot that would start a component or continue a run of dots
+/// (i.e. `.` / `..` / leading-dot hidden names) is defused the same way.
+/// Empty input yields "unnamed" rather than an empty path segment. Always
+/// returns freshly allocated memory (never a borrowed literal), so callers
+/// can free the result unconditionally.
+pub fn sanitizePathComponent(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    if (s.len == 0) return allocator.dupe(u8, "unnamed");
+    const out = try allocator.alloc(u8, s.len);
+    for (s, 0..) |c, i| {
+        out[i] = if (std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.') c else '-';
+    }
+    for (out, 0..) |c, i| {
+        if (c == '.' and (i == 0 or out[i - 1] == '.')) out[i] = '-';
+    }
+    return out;
+}
+
+/// Writes remote-controlled text with terminal control bytes stripped.
+///
+/// Repo descriptions and README bodies are authored by whoever published the
+/// repo -- exactly the strangers this tool exists to surface -- and get
+/// printed straight to the user's terminal. Left raw, an embedded escape
+/// sequence could rewrite the listing to forge the very trust signals
+/// (stars, age, the dump-flagged marker) the user is reading it for, or hit
+/// terminals that honor OSC 52 clipboard writes. bangbang's own coloring is
+/// emitted separately by the caller, so nothing legitimate is lost here.
+///
+/// Strips C0 controls and DEL, plus C1 controls in their two-byte UTF-8 form
+/// (0xC2 0x80-0x9F) since a bare 0x80-0x9F byte is a UTF-8 continuation byte
+/// that would corrupt multi-byte characters if dropped on its own. Tabs are
+/// always kept; newlines only when `allow_newlines` is set (false for
+/// single-line contexts like a description, where a newline would break the
+/// listing layout).
+pub fn writeSanitized(out: *std.Io.Writer, s: []const u8, allow_newlines: bool) !void {
+    var i: usize = 0;
+    while (i < s.len) {
+        const c = s[i];
+        if (c == 0xC2 and i + 1 < s.len and s[i + 1] >= 0x80 and s[i + 1] <= 0x9F) {
+            i += 2; // C1 control, encoded as two UTF-8 bytes
+            continue;
+        }
+        i += 1;
+        if (c == '\n') {
+            try out.writeByte(if (allow_newlines) '\n' else ' ');
+            continue;
+        }
+        if (c == '\t') {
+            try out.writeByte('\t');
+            continue;
+        }
+        if (c < 0x20 or c == 0x7F) continue;
+        try out.writeByte(c);
+    }
+}
+
 /// Builds a short, badge-stripped excerpt from a full README for the
 /// collapsed REPL view. Shared by github.zig/gitlab.zig so both hosts produce
 /// excerpts the same way.
@@ -225,6 +288,63 @@ test "sanitizeDirName replaces unsafe characters, keeps alnum/-/_" {
     const out = try sanitizeDirName(allocator, "confluence CVE (generic)!");
     defer allocator.free(out);
     try std.testing.expectEqualStrings("confluence-CVE--generic--", out);
+}
+
+test "sanitizePathComponent keeps ordinary repo names but defuses traversal" {
+    const allocator = std.testing.allocator;
+
+    // Dots inside a name are normal and must survive.
+    const plain = try sanitizePathComponent(allocator, "log4j-shell-poc.py");
+    defer allocator.free(plain);
+    try std.testing.expectEqualStrings("log4j-shell-poc.py", plain);
+
+    // Separators and traversal sequences must not survive.
+    const traversal = try sanitizePathComponent(allocator, "../../etc/cron.d");
+    defer allocator.free(traversal);
+    try std.testing.expectEqualStrings("-------etc-cron.d", traversal);
+    try std.testing.expect(std.mem.indexOf(u8, traversal, "..") == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, traversal, '/') == null);
+
+    // A leading dot would make a hidden file (or be "."/".." outright).
+    const dotfile = try sanitizePathComponent(allocator, ".ssh");
+    defer allocator.free(dotfile);
+    try std.testing.expectEqualStrings("-ssh", dotfile);
+
+    const dotdot = try sanitizePathComponent(allocator, "..");
+    defer allocator.free(dotdot);
+    try std.testing.expectEqualStrings("--", dotdot);
+
+    // Empty input must not produce an empty path segment.
+    const empty = try sanitizePathComponent(allocator, "");
+    defer allocator.free(empty);
+    try std.testing.expectEqualStrings("unnamed", empty);
+}
+
+test "writeSanitized strips terminal control bytes from remote text" {
+    const allocator = std.testing.allocator;
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
+
+    // An escape sequence that would otherwise erase the line it was printed
+    // on, plus an OSC 52 clipboard write.
+    try writeSanitized(&buf.writer, "safe\x1b[2K\x1b]52;c;cGF5bG9hZA==\x07end", true);
+    try std.testing.expectEqualStrings("safe[2K]52;c;cGF5bG9hZA==end", buf.written());
+
+    // Newlines collapse to spaces in single-line contexts, survive otherwise.
+    buf.clearRetainingCapacity();
+    try writeSanitized(&buf.writer, "one\ntwo", false);
+    try std.testing.expectEqualStrings("one two", buf.written());
+
+    buf.clearRetainingCapacity();
+    try writeSanitized(&buf.writer, "one\ntwo", true);
+    try std.testing.expectEqualStrings("one\ntwo", buf.written());
+
+    // C1 controls arrive as two UTF-8 bytes; dropping only the second would
+    // corrupt the stream, so the pair goes together. Real multi-byte
+    // characters must be untouched.
+    buf.clearRetainingCapacity();
+    try writeSanitized(&buf.writer, "a\xc2\x9bm caf\xc3\xa9", true);
+    try std.testing.expectEqualStrings("am caf\xc3\xa9", buf.written());
 }
 
 test "dateOnly trims the time portion off an ISO-8601 timestamp" {

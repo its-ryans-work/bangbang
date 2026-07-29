@@ -283,34 +283,44 @@ fn readmeViaHttp(
 
 /// Clones `hit` into `dest_dir` using the active auth tier: the `glab` CLI
 /// when available (auth handled transparently), otherwise plain `git clone`
-/// over HTTPS with GitLab's "oauth2:<token>" convention if we have one,
-/// anonymous otherwise -- fine, since PoC repos are almost always public.
-pub fn clone(allocator: std.mem.Allocator, io: std.Io, mode: auth.AuthMode, hit: forge.RepoHit, dest_dir: []const u8) !void {
+/// over HTTPS. Any token travels in the child environment as a scoped
+/// Authorization header (see `auth.gitCloneEnv`) rather than in the URL, so
+/// it never lands in the cloned repo's `.git/config`, git's error output, or
+/// a world-readable argv. Anonymous otherwise -- fine, since PoC repos are
+/// almost always public.
+pub fn clone(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    mode: auth.AuthMode,
+    hit: forge.RepoHit,
+    dest_dir: []const u8,
+    environ: *const std.process.Environ.Map,
+) !void {
+    const token: ?[]const u8 = switch (mode) {
+        .token => |t| t,
+        .cli, .none => null,
+    };
+
     const result = switch (mode) {
         .cli => try std.process.run(allocator, io, .{
             .argv = &.{ "glab", "repo", "clone", hit.full_name, dest_dir },
             .stdout_limit = .limited(64 * 1024),
             .stderr_limit = .limited(64 * 1024),
         }),
-        .token => |t| blk: {
-            const url = try std.fmt.allocPrint(allocator, "https://oauth2:{s}@gitlab.com/{s}.git", .{ t, hit.full_name });
-            break :blk try std.process.run(allocator, io, .{
-                .argv = &.{ "git", "clone", "--depth", "1", url, dest_dir },
-                .stdout_limit = .limited(64 * 1024),
-                .stderr_limit = .limited(64 * 1024),
-            });
-        },
-        .none => blk: {
+        .token, .none => blk: {
             const url = try std.fmt.allocPrint(allocator, "https://gitlab.com/{s}.git", .{hit.full_name});
+            var env = try auth.gitCloneEnv(allocator, environ, .gitlab, token);
+            defer env.deinit();
             break :blk try std.process.run(allocator, io, .{
                 .argv = &.{ "git", "clone", "--depth", "1", url, dest_dir },
+                .environ_map = &env,
                 .stdout_limit = .limited(64 * 1024),
                 .stderr_limit = .limited(64 * 1024),
             });
         },
     };
     if (!forge.termOk(result.term)) {
-        std.debug.print("{s}\n", .{result.stderr});
+        auth.printRedactedStderr(result.stderr, token);
         return error.CloneFailed;
     }
 }

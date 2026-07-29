@@ -20,7 +20,10 @@ pub fn countCveMentions(allocator: std.mem.Allocator, description: []const u8, r
 }
 
 /// Sets cve_mention_count + is_dump on every hit in place. `threshold` is the
-/// mention count at or above which a hit is flagged as a dump. Sorting,
+/// mention count at or above which a hit is flagged as a dump; 0 disables
+/// dump detection entirely, matching the "0 means no limit" convention
+/// `--max-cves`/`--max-hits` already use (taken literally, `count >= 0` would
+/// instead flag *every* hit and hide the entire listing). Sorting,
 /// hide/show-all, and the max-hits display cap are ui.zig's job (done
 /// dynamically per render, since show-all is a live REPL toggle) -- this
 /// only annotates.
@@ -28,8 +31,33 @@ pub fn annotate(allocator: std.mem.Allocator, hits: []forge.RepoHit, threshold: 
     for (hits) |*hit| {
         const count = try countCveMentions(allocator, hit.description, hit.readme_full);
         hit.cve_mention_count = count;
-        hit.is_dump = count >= threshold;
+        hit.is_dump = threshold != 0 and count >= threshold;
     }
+}
+
+test "annotate treats threshold 0 as disabled, not as flag-everything" {
+    const allocator = std.testing.allocator;
+    var hits = [_]forge.RepoHit{.{
+        .host = .github,
+        .owner = "someone",
+        .name = "PoC",
+        .full_name = "someone/PoC",
+        .stars = 10,
+        .description = "",
+        .readme_excerpt = "",
+        // Enough distinct CVEs to trip any sane threshold.
+        .readme_full = "CVE-2024-4040 CVE-2024-1234 CVE-2023-9999 CVE-2023-8888 CVE-2023-7777 CVE-2023-6666 CVE-2023-5555 CVE-2023-4444 CVE-2023-3333",
+    }};
+
+    // Taken literally, `count >= 0` would flag this (and every other hit,
+    // including zero-mention ones) and hide the whole listing.
+    try annotate(allocator, &hits, 0);
+    try std.testing.expect(!hits[0].is_dump);
+    try std.testing.expectEqual(@as(usize, 9), hits[0].cve_mention_count);
+
+    // A real threshold still flags it.
+    try annotate(allocator, &hits, default_threshold);
+    try std.testing.expect(hits[0].is_dump);
 }
 
 test "countCveMentions counts distinct CVEs across description and readme" {

@@ -26,7 +26,12 @@ const Config = struct {
     download_dir: ?[]const u8 = null, // null = ui.zig's own default ("./bangbang-downloads")
 };
 
-fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, environ: *const std.process.Environ.Map) !Config {
+fn parseArgs(
+    allocator: std.mem.Allocator,
+    args: []const [:0]const u8,
+    environ: *const std.process.Environ.Map,
+    out: *std.Io.Writer,
+) !Config {
     var cfg: Config = .{ .nvd_api_key = environ.get("NVD_API_KEY") };
 
     var query_parts: std.ArrayList([]const u8) = .empty;
@@ -75,6 +80,13 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, environ: 
             return error.ShowHelp;
         } else if (std.mem.eql(u8, a, "--version") or std.mem.eql(u8, a, "-v")) {
             return error.ShowVersion;
+        } else if (a.len > 1 and a[0] == '-') {
+            // Anything dash-prefixed that got this far is a typo or a flag
+            // that doesn't exist. Folding it into the query instead would
+            // silently search NVD for the literal text "--max-hit 3" and
+            // report "no CVEs matched", giving no hint the flag was wrong.
+            try out.print("unknown flag: {s}\n\n", .{a});
+            return error.UnknownFlag;
         } else {
             try query_parts.append(allocator, a);
         }
@@ -96,8 +108,9 @@ fn printUsage(out: *std.Io.Writer, prog: []const u8) !void {
         \\                     (does NOT revoke them on GitHub/GitLab/Codeberg's side -- local disk only)
         \\  --max-cves N       max CVEs to pivot on (default: unlimited -- every match NVD has,
         \\                     capped only at {d} as a backstop)
-        \\  --max-hits N       max repo hits fetched per CVE per host (default 5)
-        \\  --threshold N      hide repos mentioning >= N distinct CVEs as list-dumps (default {d})
+        \\  --max-hits N       max repo hits shown per CVE per host (default 5; 0 = no cap)
+        \\  --threshold N      hide repos mentioning >= N distinct CVEs as list-dumps (default {d};
+        \\                     0 = never hide anything as a dump)
         \\  --show-all         don't hide anything, just flag it
         \\  --dir PATH         download directory (default ./bangbang-downloads); can still be
         \\                     changed later with the `dir` command inside the REPL
@@ -195,8 +208,11 @@ fn buildGroup(
     sources: std.EnumSet(forge.Host),
 ) !forge.CveGroup {
     // Over-fetch relative to max_hits so dropping dump-flagged hits still
-    // leaves close to max_hits good results per host.
-    const per_page = max_hits * 3;
+    // leaves close to max_hits good results per host. max_hits 0 means "no
+    // display cap", so ask for as much as these APIs will return in one page
+    // (100 is GitHub's and GitLab's documented per_page maximum) rather than
+    // the 0 that multiplying through would produce.
+    const per_page = if (max_hits == 0) 100 else max_hits * 3;
 
     // std.Io.async never errors -- if no worker thread is free it just runs
     // the task inline instead, so this degrades gracefully to the old fully
@@ -291,7 +307,7 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(allocator);
     const prog = if (args.len > 0) args[0] else "bangbang";
 
-    const cfg = parseArgs(allocator, args, init.environ_map) catch |err| {
+    const cfg = parseArgs(allocator, args, init.environ_map, out) catch |err| {
         if (err == error.ShowVersion) {
             try out.print("bangbang {s}\n", .{build_options.version});
             try out.flush();
@@ -425,8 +441,9 @@ pub fn main(init: std.process.Init) !void {
         .threshold = cfg.threshold,
         .max_hits = cfg.max_hits,
         .fallback_query = if (is_keyword_search) cfg.query else null,
-        .fallback_per_page = cfg.max_hits * 3,
+        .fallback_per_page = if (cfg.max_hits == 0) 100 else cfg.max_hits * 3,
         .sources = cfg.sources,
+        .environ = init.environ_map,
     };
     if (cfg.download_dir) |d| opts.default_download_dir = d;
 

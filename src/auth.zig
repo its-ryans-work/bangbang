@@ -183,6 +183,100 @@ pub fn saveCachedToken(
     });
 }
 
+/// The origin each host's clone URLs live under, used to scope the git
+/// credential below to that one origin.
+fn cloneOriginFor(host: forge.Host) []const u8 {
+    return switch (host) {
+        .github => "https://github.com/",
+        .gitlab => "https://gitlab.com/",
+        .codeberg => "https://codeberg.org/",
+        .exploitdb => unreachable, // plain file download, never cloned
+    };
+}
+
+/// The HTTP Basic userinfo each host expects, matching what these tokens
+/// have always been sent as -- GitHub takes the token as the username with an
+/// empty password, GitLab uses its `oauth2:<token>` convention, and
+/// Codeberg's Forgejo backend uses `token:<token>`.
+fn basicUserinfoFor(allocator: std.mem.Allocator, host: forge.Host, token: []const u8) ![]const u8 {
+    return switch (host) {
+        .github => std.fmt.allocPrint(allocator, "{s}:", .{token}),
+        .gitlab => std.fmt.allocPrint(allocator, "oauth2:{s}", .{token}),
+        .codeberg => std.fmt.allocPrint(allocator, "token:{s}", .{token}),
+        .exploitdb => unreachable,
+    };
+}
+
+/// Builds the environment for a `git clone` that needs to authenticate.
+///
+/// The token deliberately does *not* go in the clone URL. git copies the URL
+/// it was given verbatim into the new repo's `.git/config` as
+/// `remote.origin.url`, which would leave the user's PAT sitting in plaintext
+/// inside a directory full of third-party PoC repos they may share or
+/// re-push; git also echoes that URL (token included) in its error output on
+/// a failed clone, and an argv element is world-readable via
+/// `/proc/<pid>/cmdline` on Linux while the clone runs.
+///
+/// Passing it as an `http.<origin>.extraHeader` through git's `GIT_CONFIG_*`
+/// environment mechanism avoids all three: config set this way is transient
+/// (never written to the cloned repo), and a child's environment -- unlike
+/// its argv -- is only readable by the same user. Scoping the header to the
+/// host's own origin keeps it from being replayed if a redirect ever points
+/// somewhere else.
+///
+/// Returns a full copy of the parent environment plus those settings, since
+/// `environ_map` *replaces* the child environment rather than extending it.
+pub fn gitCloneEnv(
+    allocator: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    host: forge.Host,
+    token: ?[]const u8,
+) !std.process.Environ.Map {
+    var env = try environ.clone(allocator);
+    // Without this git would try to prompt for credentials; std.process.run
+    // gives the child no stdin, so that surfaces as a confusing failure
+    // rather than a clean "auth didn't work".
+    try env.put("GIT_TERMINAL_PROMPT", "0");
+
+    const t = token orelse return env;
+
+    const userinfo = try basicUserinfoFor(allocator, host, t);
+    const encoder = std.base64.standard.Encoder;
+    const b64 = try allocator.alloc(u8, encoder.calcSize(userinfo.len));
+    _ = encoder.encode(b64, userinfo);
+
+    const key = try std.fmt.allocPrint(allocator, "http.{s}.extraHeader", .{cloneOriginFor(host)});
+    const value = try std.fmt.allocPrint(allocator, "Authorization: Basic {s}", .{b64});
+
+    try env.put("GIT_CONFIG_COUNT", "1");
+    try env.put("GIT_CONFIG_KEY_0", key);
+    try env.put("GIT_CONFIG_VALUE_0", value);
+    return env;
+}
+
+/// Prints a failed clone's stderr, with `token` blanked out if it appears.
+///
+/// With the token out of the URL it shouldn't show up here at all; this is a
+/// second line of defense so that no future change (or a git version that
+/// echoes its config) can turn an error message into a credential disclosure
+/// in the user's scrollback or a pasted bug report.
+pub fn printRedactedStderr(stderr: []const u8, token: ?[]const u8) void {
+    const t = token orelse {
+        std.debug.print("{s}\n", .{stderr});
+        return;
+    };
+    if (t.len == 0 or std.mem.indexOf(u8, stderr, t) == null) {
+        std.debug.print("{s}\n", .{stderr});
+        return;
+    }
+    var rest = stderr;
+    while (std.mem.indexOf(u8, rest, t)) |at| {
+        std.debug.print("{s}***", .{rest[0..at]});
+        rest = rest[at + t.len ..];
+    }
+    std.debug.print("{s}\n", .{rest});
+}
+
 pub fn openBrowser(allocator: std.mem.Allocator, io: std.Io, url: []const u8) void {
     const argv: []const []const u8 = if (builtin.os.tag == .macos)
         &.{ "open", url }
