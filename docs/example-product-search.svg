@@ -1,0 +1,19 @@
+<svg width="980" height="282" viewBox="0 0 980 282" xmlns="http://www.w3.org/2000/svg" font-family="SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace">
+<rect width="980" height="282" rx="10" fill="#282c34"/>
+<path d="M0 10 a10 10 0 0 1 10 -10 h960 a10 10 0 0 1 10 10 v24 h-980 z" fill="#21252b"/>
+<circle cx="22" cy="22" r="6" fill="#ff5f56"/>
+<circle cx="42" cy="22" r="6" fill="#ffbd2e"/>
+<circle cx="62" cy="22" r="6" fill="#27c93f"/>
+<text x="490.0" y="26" font-size="12" fill="#5c6370" text-anchor="middle">bangbang -- caddy</text>
+<text x="18" y="58" font-size="14" xml:space="preserve"><tspan fill="#98c379">$ </tspan><tspan fill="#abb2bf">bangbang caddy --max-cves 5</tspan></text>
+<text x="18" y="78" font-size="14" xml:space="preserve"><tspan fill="#5c6370">searching NVD for &quot;caddy&quot;...</tspan></text>
+<text x="18" y="98" font-size="14" xml:space="preserve"><tspan fill="#abb2bf"></tspan></text>
+<text x="18" y="118" font-size="14" xml:space="preserve"><tspan fill="#e06c75" font-weight="600">5 CVE(s) Found!</tspan></text>
+<text x="18" y="138" font-size="14" xml:space="preserve"><tspan fill="#abb2bf"></tspan></text>
+<text x="18" y="158" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">Newest first:</tspan><tspan fill="#abb2bf"> CVE-2026-55454</tspan><tspan fill="#e06c75" font-weight="600">(9.9)</tspan><tspan fill="#abb2bf"> CVE-2026-52846</tspan><tspan fill="#e5c07b">(4.2)</tspan><tspan fill="#abb2bf"> CVE-2026-52845</tspan><tspan fill="#e06c75" font-weight="600">(8.1)</tspan></text>
+<text x="18" y="178" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">              </tspan><tspan fill="#abb2bf">CVE-2026-52844</tspan><tspan fill="#e06c75" font-weight="600">(7.5)</tspan><tspan fill="#abb2bf"> CVE-2026-50189</tspan><tspan fill="#e06c75" font-weight="600">(8.9)</tspan></text>
+<text x="18" y="198" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">hunting PoCs for CVE-2026-50189 on gh + glab + cb + edb...</tspan></text>
+<text x="18" y="218" font-size="14" xml:space="preserve"><tspan fill="#abb2bf"></tspan></text>
+<text x="18" y="238" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">No repo hits found for any CVE. Search github + gitlab + codeberg for &quot;caddy CVE&quot; instead? [y/N] </tspan><tspan fill="#abb2bf" font-weight="600">n</tspan></text>
+<text x="18" y="258" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">no PoCs found -- nothing to select.</tspan></text>
+</svg>

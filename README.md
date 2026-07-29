@@ -4,7 +4,7 @@ A CLI that hunts down public proof-of-concept exploits for a product's CVEs, so 
 
 ## Why
 
-Chasing down PoCs for a product's CVEs the manual way looks like this: search NVD for what's affected, then for *each* CVE, separately search GitHub, GitLab, Codeberg, and exploit-db for a working writeup or exploit. Even with shortcuts like DuckDuckGo's `!cve` and `!gh` bangs, that's still one search per CVE per source, in a browser, by hand. And a lot of what comes back is noise: abandoned forks, unrelated "list of 200 CVEs" aggregator repos, the odd typosquat.
+Chasing down PoCs for a product's CVEs the manual way looks like this: search NVD for what's affected, then for *each* CVE, separately search GitHub, GitLab, Codeberg, and exploit-db for a working writeup or exploit. Even with shortcuts like DuckDuckGo's bangs (`!cve [product]` and `!gh [cve-#####]`), that's still one search per CVE per source, in a browser, by hand. And a lot of what comes back is noise: abandoned forks, unrelated "list of 200 CVEs" aggregator repos, the odd typosquat.
 
 `bangbang` automates that whole loop. Point it at a product name and it:
 
@@ -15,39 +15,15 @@ It also works the other way: give it a specific `CVE-YYYY-NNNNN` and it skips st
 
 ## How it works
 
-```
-$ bangbang CVE-2026-46368
+**Searching for one specific CVE:**
 
-1 CVE(s) Found!
+![bangbang searching for CVE-2023-22515, showing a bold-red 9.8 CVSS score and three real GitHub PoC repos](docs/example-cve-id.svg)
 
-Newest first: CVE-2026-46368(8.7)
-hunting PoCs for CVE-2026-46368 on gh + glab + cb + edb...
+**Searching for a product, e.g. caddy:**
 
-[1] CVE-2026-46368  8.7  (2 shown)
-  [ ] 1.1  gh  iwallplace/CVE-2026-46368-OpenWrt-Exploit  ★1  Proof of Concept exploit for CVE-2026-46368 -- authenticated root command injection in OpenWrt luci-app-https-dns-proxy
-        forks:0  created:2026-01-16  https://github.com/iwallplace/CVE-2026-46368-OpenWrt-Exploit  (author: https://github.com/iwallplace)
-  [ ] 1.2  edb  EDB-52521  ★0  OpenWrt 23.05 - Authenticated Remote Code Execution (RCE)
-        forks:0  created:2026-04-29  https://www.exploit-db.com/exploits/52521
-commands:
-  list                    reprint the current listing
-  expand <target...>      show the full readme for one or more hits (e.g. `expand 1` or `expand 1.2`)
-  select <target...>      mark hits for download (`select 1` selects every hit under CVE 1)
-  unselect <target...>    unmark hits
-  dir [path]              show or set the download directory
-  download                clone every selected hit into <dir>/<group>/...
-  show-all                also show hits filtered out as CVE-list dumps
-  hide-dumps              hide them again
-  help                    this message
-  quit                    exit
+![bangbang searching for the product caddy, showing 5 CVEs found each with its own severity-colored score](docs/example-product-search.svg)
 
-> expand 1.1
-> select 1.1 1.2
-> download
-```
-
-(a keyword search, e.g. `bangbang caddy`, looks the same but starts with a whole list of CVEs found for that product, each with its own colored score, before diving into per-CVE PoC hunting)
-
-The CVE count and each score are colored by severity: bold red for critical/high, yellow for medium, blue for low. The worst findings jump out immediately.
+The CVE count and each score are colored by severity: bold red for critical/high, yellow for medium, blue for low. The worst findings jump out immediately. Once results are in, you're dropped into a prompt to `expand`, `select`, and `download` hits, see [Interactive commands](#interactive-commands) below for the full reference.
 
 ## Prerequisites
 
