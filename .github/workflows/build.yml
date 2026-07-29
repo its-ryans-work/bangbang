@@ -1,0 +1,81 @@
+name: Build
+
+"on":
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Run tests
+        run: zig build test
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            target: x86_64-linux-gnu
+            ext: ""
+          - name: linux-arm64
+            target: aarch64-linux-gnu
+            ext: ""
+          - name: windows-x64
+            target: x86_64-windows-gnu
+            ext: ".exe"
+          - name: macos-arm64
+            target: aarch64-macos
+            ext: ""
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }} -Dversion=${{ steps.version.outputs.value }}
+
+      - name: Stage binary
+        run: |
+          mkdir -p dist
+          cp zig-out/bin/bangbang${{ matrix.ext }} dist/bangbang-${{ matrix.name }}${{ matrix.ext }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bangbang-${{ matrix.name }}
+          path: dist/bangbang-${{ matrix.name }}${{ matrix.ext }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
