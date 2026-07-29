@@ -267,6 +267,37 @@ fn writeSourceList(out: *std.Io.Writer, sources: std.EnumSet(forge.Host)) !void 
     }
 }
 
+/// Number of CVEs past which a run is slow enough to be worth warning about
+/// up front. Below this the whole thing finishes fast enough that a heads-up
+/// would just be noise.
+const slow_run_cve_count: usize = 15;
+
+const progress_width: usize = 24;
+
+/// Redraws the in-place progress bar for the hunting loop. `done` is how many
+/// CVEs are fully processed; `current` is the one being worked on now.
+///
+/// A plain "hunting PoCs for CVE-X..." line gave no sense of how much was
+/// left, which on a 60-CVE run against a slow host reads as a hang. Only ever
+/// called on a TTY -- piped output keeps one plain line per CVE so logs stay
+/// greppable.
+fn renderProgress(
+    out: *std.Io.Writer,
+    c: color.Colors,
+    done: usize,
+    total: usize,
+    current: []const u8,
+    found: usize,
+) !void {
+    const filled = if (total == 0) progress_width else (done * progress_width) / total;
+    try out.print("\r\x1b[K{s}[", .{c.dim});
+    var i: usize = 0;
+    while (i < progress_width) : (i += 1) {
+        try out.writeAll(if (i < filled) "\xe2\x96\x88" else "\xe2\x96\x91");
+    }
+    try out.print("]{s} {d}/{d}  {s}  ({d} found)", .{ c.reset, done, total, current, found });
+}
+
 fn mostSevere(matches: []const nvd.CveMatch) cve.Severity {
     var best: cve.Severity = .none;
     for (matches) |m| {
@@ -289,7 +320,9 @@ fn printSummary(out: *std.Io.Writer, c: color.Colors, matches: []const nvd.CveMa
         const score_str = try color.formatScore(m.cvss.score, &score_buf);
         try out.print(" {s}({s}{s}{s})", .{ id_str, c.forSeverity(m.cvss.severity), score_str, c.reset });
     }
-    try out.writeAll("\n");
+    // Trailing blank line so the CVE enumeration reads as its own block,
+    // separate from the progress/status output that follows it.
+    try out.writeAll("\n\n");
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -411,22 +444,41 @@ pub fn main(init: std.process.Init) !void {
     try writeSourceList(&source_list_buf.writer, cfg.sources);
     const source_list = source_list_buf.written();
 
+    // Every host is queried once per CVE, and those queries are serial across
+    // CVEs (concurrency is across hosts only -- see the note on
+    // fetchGithubHits), so a big CVE list means a genuinely long run. Say so
+    // before starting rather than letting it look like a hang.
+    if (cve_matches.len > slow_run_cve_count) {
+        try out.print(
+            "{s}{d} CVEs to hunt on {s} -- this can take a few minutes.{s}\n",
+            .{ c.dim, cve_matches.len, source_list, c.reset },
+        );
+        if (cfg.sources.contains(.codeberg)) {
+            try out.print(
+                "{s}codeberg's search API is far slower than the others and usually sets the pace; " ++
+                    "--sources gh,glab,edb skips it.{s}\n",
+                .{ c.dim, c.reset },
+            );
+        }
+        try out.flush();
+    }
+
     const groups = try allocator.alloc(forge.CveGroup, cve_matches.len);
     var rate_limited: std.EnumSet(forge.Host) = .initEmpty();
+    var total_hits: usize = 0;
     for (cve_matches, 0..) |m, i| {
         var cve_buf: [16]u8 = undefined;
         const id_str = try m.id.toSlice(&cve_buf);
         if (stdout_tty) {
-            try out.print("\r\x1b[Khunting PoCs for {s} on {s}...", .{ id_str, source_list });
+            try renderProgress(out, c, i, cve_matches.len, id_str, total_hits);
         } else {
             try out.print("hunting PoCs for {s} on {s}...\n", .{ id_str, source_list });
         }
         try out.flush();
         groups[i] = try buildGroup(allocator, io, gh_mode, gl_mode, cb_mode, edb_db, m, cfg.max_hits, cfg.threshold, cfg.sources);
         rate_limited.setUnion(groups[i].rate_limited);
+        total_hits += groups[i].hits.len;
     }
-    var total_hits: usize = 0;
-    for (groups) |g| total_hits += g.hits.len;
     if (stdout_tty) try out.writeAll("\r\x1b[K");
     try out.print("hunted for PoCs across {d} CVE(s). {d} found!\n", .{ cve_matches.len, total_hits });
     try printRateLimitWarning(out, c, rate_limited);

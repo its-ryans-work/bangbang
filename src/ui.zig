@@ -116,6 +116,28 @@ fn buildVisible(allocator: std.mem.Allocator, groups: []const Group, show_all: b
     return try result.toOwnedSlice(allocator);
 }
 
+/// Indices of the groups worth putting in the listing: those that turned up
+/// at least one hit.
+///
+/// A CVE with nothing found anywhere can't be expanded, selected, or
+/// downloaded, so giving it a numbered slot invites the user to try to select
+/// something that isn't there -- and on a broad keyword search the no-hit
+/// groups vastly outnumber the real ones, burying them. Those are collapsed
+/// into a single count instead (see `renderAll`).
+///
+/// Keyed off `all.len` rather than what's currently visible, so the numbering
+/// stays stable across show-all/hide-dumps: a group whose only hits are
+/// dump-flagged still gets listed (showing "0 shown, N filtered"), because it
+/// *did* find something and show-all will reveal it.
+fn buildListed(allocator: std.mem.Allocator, groups: []const Group) ![]usize {
+    var listed: std.ArrayList(usize) = .empty;
+    defer listed.deinit(allocator);
+    for (groups, 0..) |g, i| {
+        if (g.all.len > 0) try listed.append(allocator, i);
+    }
+    return try listed.toOwnedSlice(allocator);
+}
+
 fn countDumps(all: []const HitEntry) usize {
     var n: usize = 0;
     for (all) |e| {
@@ -146,9 +168,15 @@ fn renderHit(out: *std.Io.Writer, c: color.Colors, e: HitEntry, gi: usize, hi: u
     try out.print("{s}\n", .{c.reset});
 }
 
-fn renderAll(out: *std.Io.Writer, c: color.Colors, groups: []const Group, visible: []const []usize) !void {
-    for (groups, 0..) |g, gi_0| {
-        const gi = gi_0 + 1;
+fn renderAll(
+    out: *std.Io.Writer,
+    c: color.Colors,
+    groups: []const Group,
+    visible: []const []usize,
+    listed: []const usize,
+) !void {
+    for (listed, 1..) |gi_0, gi| {
+        const g = groups[gi_0];
         const idxs = visible[gi_0];
         const dump_count = countDumps(g.all);
 
@@ -158,9 +186,7 @@ fn renderAll(out: *std.Io.Writer, c: color.Colors, groups: []const Group, visibl
             c.cyan,                          gi,        g.display_label, c.reset,
             c.forSeverity(g.cvss.severity), score_str, c.reset,
         });
-        if (idxs.len == 0 and dump_count == 0) {
-            try out.writeAll("  (no hits)\n");
-        } else if (dump_count > 0) {
+        if (dump_count > 0) {
             try out.print("  ({d} shown, {s}{d} filtered as CVE-list dump(s){s})\n", .{ idxs.len, c.yellow, dump_count, c.reset });
         } else {
             try out.print("  ({d} shown)\n", .{idxs.len});
@@ -168,10 +194,19 @@ fn renderAll(out: *std.Io.Writer, c: color.Colors, groups: []const Group, visibl
 
         for (idxs, 1..) |idx, hi| try renderHit(out, c, g.all[idx], gi, hi);
     }
+
+    // The CVEs that turned up nothing, as one line instead of a numbered
+    // entry each -- they're not selectable, so listing them individually
+    // would just be a wall of dead options.
+    const empty = groups.len - listed.len;
+    if (empty > 0) {
+        try out.print("\n{s}{d} other CVE(s) had no PoCs on any source.{s}\n", .{ c.dim, empty, c.reset });
+    }
 }
 
 fn printHelp(out: *std.Io.Writer) !void {
     try out.writeAll(
+        \\
         \\commands:
         \\  list                    reprint the current listing
         \\  expand <target...>      show the full readme for one or more hits (e.g. `expand 1` or `expand 1.2`)
@@ -204,18 +239,27 @@ fn parseTarget(tok: []const u8) ?Target {
     return .{ .group = g, .hit = null };
 }
 
-fn applyToTargets(out: *std.Io.Writer, groups: []Group, visible: []const []usize, it: anytype, select: bool) !void {
+fn applyToTargets(
+    out: *std.Io.Writer,
+    groups: []Group,
+    visible: []const []usize,
+    listed: []const usize,
+    it: anytype,
+    select: bool,
+) !void {
     var touched: usize = 0;
     while (it.next()) |tok| {
         const target = parseTarget(tok) orelse {
             try out.print("bad target: {s} (expected N or N.M)\n", .{tok});
             continue;
         };
-        if (target.group == 0 or target.group > groups.len) {
+        // Targets address the listing's own numbering, which skips CVEs that
+        // found nothing -- so translate back to the real group index.
+        if (target.group == 0 or target.group > listed.len) {
             try out.print("no such group: {d}\n", .{target.group});
             continue;
         }
-        const gi = target.group - 1;
+        const gi = listed[target.group - 1];
         const idxs = visible[gi];
 
         if (target.hit) |h| {
@@ -252,18 +296,26 @@ fn printExpanded(out: *std.Io.Writer, c: color.Colors, e: HitEntry, group_num: u
     try out.writeAll("\n");
 }
 
-fn expandTargets(out: *std.Io.Writer, c: color.Colors, groups: []const Group, visible: []const []usize, it: anytype) !void {
+fn expandTargets(
+    out: *std.Io.Writer,
+    c: color.Colors,
+    groups: []const Group,
+    visible: []const []usize,
+    listed: []const usize,
+    it: anytype,
+) !void {
     var any = false;
     while (it.next()) |tok| {
         const target = parseTarget(tok) orelse {
             try out.print("bad target: {s} (expected N or N.M)\n", .{tok});
             continue;
         };
-        if (target.group == 0 or target.group > groups.len) {
+        // Same listing-number-to-group-index translation as applyToTargets.
+        if (target.group == 0 or target.group > listed.len) {
             try out.print("no such group: {d}\n", .{target.group});
             continue;
         }
-        const gi = target.group - 1;
+        const gi = listed[target.group - 1];
         const idxs = visible[gi];
 
         if (target.hit) |h| {
@@ -456,8 +508,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, in: *s
     }
 
     const groups = groups_list.items;
+    const listed = try buildListed(allocator, groups);
     var visible = try buildVisible(allocator, groups, show_all, opts.max_hits);
-    try renderAll(out, c, groups, visible);
+    try renderAll(out, c, groups, visible, listed);
     try printHelp(out);
     try out.flush();
 
@@ -482,17 +535,17 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, in: *s
         } else if (std.mem.eql(u8, cmd, "help")) {
             try printHelp(out);
         } else if (std.mem.eql(u8, cmd, "list")) {
-            try renderAll(out, c, groups, visible);
+            try renderAll(out, c, groups, visible, listed);
         } else if (std.mem.eql(u8, cmd, "show-all")) {
             show_all = true;
             visible = try buildVisible(allocator, groups, show_all, opts.max_hits);
             try out.writeAll("showing all hits, including likely CVE-list dumps.\n");
-            try renderAll(out, c, groups, visible);
+            try renderAll(out, c, groups, visible, listed);
         } else if (std.mem.eql(u8, cmd, "hide-dumps")) {
             show_all = false;
             visible = try buildVisible(allocator, groups, show_all, opts.max_hits);
             try out.writeAll("hiding likely CVE-list dumps again.\n");
-            try renderAll(out, c, groups, visible);
+            try renderAll(out, c, groups, visible, listed);
         } else if (std.mem.eql(u8, cmd, "dir")) {
             const rest = std.mem.trim(u8, it.rest(), " \t");
             if (rest.len == 0) {
@@ -502,11 +555,11 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, in: *s
                 try out.print("download directory set to: {s}\n", .{download_dir});
             }
         } else if (std.mem.eql(u8, cmd, "select")) {
-            try applyToTargets(out, groups, visible, &it, true);
+            try applyToTargets(out, groups, visible, listed, &it, true);
         } else if (std.mem.eql(u8, cmd, "unselect")) {
-            try applyToTargets(out, groups, visible, &it, false);
+            try applyToTargets(out, groups, visible, listed, &it, false);
         } else if (std.mem.eql(u8, cmd, "expand")) {
-            try expandTargets(out, c, groups, visible, &it);
+            try expandTargets(out, c, groups, visible, listed, &it);
         } else if (std.mem.eql(u8, cmd, "download")) {
             try doDownload(allocator, io, out, groups, download_dir, opts);
         } else {
