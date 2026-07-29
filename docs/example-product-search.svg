@@ -12,7 +12,7 @@
 <text x="18" y="138" font-size="14" xml:space="preserve"><tspan fill="#abb2bf"></tspan></text>
 <text x="18" y="158" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">Newest first:</tspan><tspan fill="#abb2bf"> CVE-2026-55454</tspan><tspan fill="#e06c75" font-weight="600">(9.9)</tspan><tspan fill="#abb2bf"> CVE-2026-52846</tspan><tspan fill="#e5c07b">(4.2)</tspan><tspan fill="#abb2bf"> CVE-2026-52845</tspan><tspan fill="#e06c75" font-weight="600">(8.1)</tspan></text>
 <text x="18" y="178" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">              </tspan><tspan fill="#abb2bf">CVE-2026-52844</tspan><tspan fill="#e06c75" font-weight="600">(7.5)</tspan><tspan fill="#abb2bf"> CVE-2026-50189</tspan><tspan fill="#e06c75" font-weight="600">(8.9)</tspan></text>
-<text x="18" y="198" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">hunting PoCs for CVE-2026-50189 on gh + glab + cb + edb...</tspan></text>
+<text x="18" y="198" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">hunted for PoCs across 5 CVE(s). 0 found!</tspan></text>
 <text x="18" y="218" font-size="14" xml:space="preserve"><tspan fill="#abb2bf"></tspan></text>
 <text x="18" y="238" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">No repo hits found for any CVE. Search github + gitlab + codeberg for &quot;caddy CVE&quot; instead? [y/N] </tspan><tspan fill="#abb2bf" font-weight="600">n</tspan></text>
 <text x="18" y="258" font-size="14" xml:space="preserve"><tspan fill="#abb2bf">no PoCs found -- nothing to select.</tspan></text>

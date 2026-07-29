@@ -348,7 +348,7 @@ pub fn main(init: std.process.Init) !void {
         cve_matches = try allocator.dupe(nvd.CveMatch, &.{single});
     } else {
         is_keyword_search = true;
-        try out.print("searching NVD for \"{s}\"...\n", .{cfg.query});
+        try out.print("{s}searching NVD for \"{s}\"...{s}\n", .{ c.dim, cfg.query, c.reset });
         try out.flush();
         const all = nvd.search(allocator, io, cfg.query, cfg.nvd_api_key) catch |err| {
             try out.print("NVD search failed: {s}\n", .{@errorName(err)});
@@ -409,7 +409,10 @@ pub fn main(init: std.process.Init) !void {
         groups[i] = try buildGroup(allocator, io, gh_mode, gl_mode, cb_mode, edb_db, m, cfg.max_hits, cfg.threshold, cfg.sources);
         rate_limited.setUnion(groups[i].rate_limited);
     }
-    if (stdout_tty) try out.writeAll("\n");
+    var total_hits: usize = 0;
+    for (groups) |g| total_hits += g.hits.len;
+    if (stdout_tty) try out.writeAll("\r\x1b[K");
+    try out.print("hunted for PoCs across {d} CVE(s). {d} found!\n", .{ cve_matches.len, total_hits });
     try printRateLimitWarning(out, c, rate_limited);
     try out.flush();
 
