@@ -34,6 +34,7 @@ pub const Options = struct {
     edb_db: ?*const exploitdb.Database = null,
     threshold: usize,
     max_hits: usize = 5,
+    min_stars: u32 = 0,
     default_download_dir: []const u8 = "./bangbang-downloads",
     /// Set to the original search keyword when the run was a keyword search
     /// (not a literal CVE ID) -- enables the zero-hits fallback offer. null
@@ -451,12 +452,15 @@ fn runGenericSearch(allocator: std.mem.Allocator, io: std.Io, out: *std.Io.Write
     off += cb_result.hits.len;
     @memcpy(merged[off..][0..edb_result.hits.len], edb_result.hits);
 
-    try filter.annotate(allocator, merged, opts.threshold);
+    // Same star floor the per-CVE pipeline applies, so the fallback search
+    // doesn't quietly reintroduce hits the user filtered out.
+    const kept = try filter.byMinStars(allocator, merged, opts.min_stars);
+    try filter.annotate(allocator, kept, opts.threshold);
 
     const dir_name = try forge.sanitizeDirName(allocator, full_query);
     const display_label = try std.fmt.allocPrint(allocator, "\"{s}\" (generic fallback search)", .{full_query});
 
-    return toGroup(allocator, .{ .display_label = display_label, .dir_name = dir_name, .hits = merged, .rate_limited = rate_limited });
+    return toGroup(allocator, .{ .display_label = display_label, .dir_name = dir_name, .hits = kept, .rate_limited = rate_limited });
 }
 
 /// Runs the interactive REPL until `quit`/`exit` or stdin EOF. `raw` is one

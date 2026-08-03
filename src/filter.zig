@@ -19,6 +19,27 @@ pub fn countCveMentions(allocator: std.mem.Allocator, description: []const u8, r
     return mentions.len;
 }
 
+/// Drops hits below `min_stars`, returning the surviving subset.
+///
+/// Unlike dump-flagging (which only hides, so `show-all` can bring it back),
+/// this is a hard filter: asking for a star floor is a statement about which
+/// results are worth considering at all, not a display preference. Hits from
+/// hosts with no star concept -- exploit-db -- are always kept, since their
+/// `stars = 0` means "not applicable" rather than "nobody starred this".
+///
+/// `min_stars` of 0 is a no-op, returning `hits` untouched.
+pub fn byMinStars(allocator: std.mem.Allocator, hits: []forge.RepoHit, min_stars: u32) ![]forge.RepoHit {
+    if (min_stars == 0) return hits;
+
+    var kept: std.ArrayList(forge.RepoHit) = .empty;
+    defer kept.deinit(allocator);
+    for (hits) |hit| {
+        if (hit.host.hasStars() and hit.stars < min_stars) continue;
+        try kept.append(allocator, hit);
+    }
+    return try kept.toOwnedSlice(allocator);
+}
+
 /// Sets cve_mention_count + is_dump on every hit in place. `threshold` is the
 /// mention count at or above which a hit is flagged as a dump; 0 disables
 /// dump detection entirely, matching the "0 means no limit" convention
@@ -33,6 +54,50 @@ pub fn annotate(allocator: std.mem.Allocator, hits: []forge.RepoHit, threshold: 
         hit.cve_mention_count = count;
         hit.is_dump = threshold != 0 and count >= threshold;
     }
+}
+
+fn starHit(host: forge.Host, name: []const u8, stars: u32) forge.RepoHit {
+    return .{
+        .host = host,
+        .owner = "someone",
+        .name = name,
+        .full_name = name,
+        .stars = stars,
+        .description = "",
+        .readme_excerpt = "",
+        .readme_full = "",
+    };
+}
+
+test "byMinStars drops low-star forge hits but never exploit-db" {
+    const allocator = std.testing.allocator;
+    var hits = [_]forge.RepoHit{
+        starHit(.github, "popular", 150),
+        starHit(.github, "unstarred", 0),
+        starHit(.gitlab, "small", 3),
+        starHit(.codeberg, "exactly-at-floor", 5),
+        // exploit-db always reports 0 stars because it has no such concept --
+        // filtering it out here would delete an entire source.
+        starHit(.exploitdb, "EDB-50592", 0),
+    };
+
+    const kept = try byMinStars(allocator, &hits, 5);
+    defer allocator.free(kept);
+
+    try std.testing.expectEqual(@as(usize, 3), kept.len);
+    try std.testing.expectEqualStrings("popular", kept[0].name);
+    try std.testing.expectEqualStrings("exactly-at-floor", kept[1].name); // >= is inclusive
+    try std.testing.expectEqualStrings("EDB-50592", kept[2].name);
+}
+
+test "byMinStars with 0 is a no-op that keeps everything" {
+    const allocator = std.testing.allocator;
+    var hits = [_]forge.RepoHit{
+        starHit(.github, "unstarred", 0),
+        starHit(.exploitdb, "EDB-1", 0),
+    };
+    const kept = try byMinStars(allocator, &hits, 0);
+    try std.testing.expectEqual(@as(usize, 2), kept.len);
 }
 
 test "annotate treats threshold 0 as disabled, not as flag-everything" {

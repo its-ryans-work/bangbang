@@ -16,6 +16,7 @@ const wizard = @import("wizard.zig");
 const Config = struct {
     max_cves: usize = 0, // 0 = unlimited (bounded only by nvd.safety_cap)
     max_hits: usize = 5,
+    min_stars: u32 = 0, // 0 = no star floor
     threshold: usize = filter.default_threshold,
     show_all: bool = false,
     nvd_api_key: ?[]const u8 = null,
@@ -48,6 +49,10 @@ fn parseArgs(
             i += 1;
             if (i >= args.len) return error.MissingFlagValue;
             cfg.max_hits = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, a, "--min-stars")) {
+            i += 1;
+            if (i >= args.len) return error.MissingFlagValue;
+            cfg.min_stars = try std.fmt.parseInt(u32, args[i], 10);
         } else if (std.mem.eql(u8, a, "--threshold")) {
             i += 1;
             if (i >= args.len) return error.MissingFlagValue;
@@ -109,6 +114,9 @@ fn printUsage(out: *std.Io.Writer, prog: []const u8) !void {
         \\  --max-cves N       max CVEs to pivot on (default: unlimited -- every match NVD has,
         \\                     capped only at {d} as a backstop)
         \\  --max-hits N       max repo hits shown per CVE per host (default 5; 0 = no cap)
+        \\  --min-stars N      only keep repos with at least N stars (default 0 = keep all).
+        \\                     Applies to github/gitlab/codeberg; exploit-db has no stars and
+        \\                     is never filtered by this.
         \\  --threshold N      hide repos mentioning >= N distinct CVEs as list-dumps (default {d};
         \\                     0 = never hide anything as a dump)
         \\  --show-all         don't hide anything, just flag it
@@ -204,6 +212,7 @@ fn buildGroup(
     edb_db: ?*const exploitdb.Database,
     match: nvd.CveMatch,
     max_hits: usize,
+    min_stars: u32,
     threshold: usize,
     sources: std.EnumSet(forge.Host),
 ) !forge.CveGroup {
@@ -247,10 +256,13 @@ fn buildGroup(
     off += cb_result.hits.len;
     @memcpy(merged[off..][0..edb_result.hits.len], edb_result.hits);
 
-    try filter.annotate(allocator, merged, threshold);
+    // Star floor first, so dump-detection and the display cap only ever see
+    // hits the user actually asked for.
+    const kept = try filter.byMinStars(allocator, merged, min_stars);
+    try filter.annotate(allocator, kept, threshold);
 
     const label = try match.id.allocString(allocator);
-    return .{ .display_label = label, .dir_name = label, .hits = merged, .cvss = match.cvss, .rate_limited = rate_limited };
+    return .{ .display_label = label, .dir_name = label, .hits = kept, .cvss = match.cvss, .rate_limited = rate_limited };
 }
 
 /// Renders `sources` as a "+"-joined list of host labels, e.g.
@@ -475,7 +487,7 @@ pub fn main(init: std.process.Init) !void {
             try out.print("hunting PoCs for {s} on {s}...\n", .{ id_str, source_list });
         }
         try out.flush();
-        groups[i] = try buildGroup(allocator, io, gh_mode, gl_mode, cb_mode, edb_db, m, cfg.max_hits, cfg.threshold, cfg.sources);
+        groups[i] = try buildGroup(allocator, io, gh_mode, gl_mode, cb_mode, edb_db, m, cfg.max_hits, cfg.min_stars, cfg.threshold, cfg.sources);
         rate_limited.setUnion(groups[i].rate_limited);
         total_hits += groups[i].hits.len;
     }
@@ -492,6 +504,7 @@ pub fn main(init: std.process.Init) !void {
         .edb_db = edb_db,
         .threshold = cfg.threshold,
         .max_hits = cfg.max_hits,
+        .min_stars = cfg.min_stars,
         .fallback_query = if (is_keyword_search) cfg.query else null,
         .fallback_per_page = if (cfg.max_hits == 0) 100 else cfg.max_hits * 3,
         .sources = cfg.sources,

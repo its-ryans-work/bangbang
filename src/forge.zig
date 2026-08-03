@@ -20,6 +20,20 @@ pub const Host = enum {
         };
     }
 
+    /// Whether this host publishes a star count worth filtering on.
+    ///
+    /// exploit-db is a flat archive of submitted exploits with no popularity
+    /// signal at all -- its hits always carry `stars = 0`. Treating that as
+    /// "zero stars" would make `--min-stars 1` silently delete every
+    /// exploit-db result, so the star threshold only applies to the three
+    /// forges that actually have one.
+    pub fn hasStars(self: Host) bool {
+        return switch (self) {
+            .github, .gitlab, .codeberg => true,
+            .exploitdb => false,
+        };
+    }
+
     /// Parses a `--sources` token, accepting either the short label used
     /// elsewhere in the UI ("gh") or the full host name ("github").
     pub fn fromLabel(s: []const u8) ?Host {

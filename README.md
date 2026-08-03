@@ -93,8 +93,12 @@ usage: bangbang [options] <keyword|CVE-ID>
                      (does NOT revoke them on GitHub/GitLab/Codeberg's side -- local disk only)
   --max-cves N       max CVEs to pivot on (default: unlimited -- every match NVD has,
                      capped only at 5000 as a backstop)
-  --max-hits N       max repo hits fetched per CVE per host (default 5)
-  --threshold N      hide repos mentioning >= N distinct CVEs as list-dumps (default 8)
+  --max-hits N       max repo hits shown per CVE per host (default 5; 0 = no cap)
+  --min-stars N      only keep repos with at least N stars (default 0 = keep all).
+                     Applies to github/gitlab/codeberg; exploit-db has no stars and
+                     is never filtered by this.
+  --threshold N      hide repos mentioning >= N distinct CVEs as list-dumps (default 8;
+                     0 = never hide anything as a dump)
   --show-all         don't hide anything, just flag it
   --dir PATH         download directory (default ./bangbang-downloads); can still be
                      changed later with the `dir` command inside the REPL
@@ -114,6 +118,7 @@ bangbang confluence                       # keyword search, every matching CVE
 bangbang CVE-2023-22515                   # one specific CVE
 bangbang caddy --max-cves 5 --max-hits 10 # cap breadth/depth for a faster, smaller run
 bangbang log4j --sources gh,glab          # skip codeberg and exploit-db this run
+bangbang log4j --min-stars 100            # only repos with real traction behind them
 bangbang caddy --dir ~/pocs               # download to ~/pocs instead of ./bangbang-downloads
 bangbang --init                           # (re)run the auth wizard
 bangbang --delete-tokens                  # wipe locally-cached tokens
